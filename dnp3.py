@@ -1,4 +1,6 @@
 from scapy.all import rdpcap, Raw
+import os
+import sys
 
 def calculate_checksum(data):
     """Calculates the checksum by summing all bytes, handling byte overflow."""
@@ -86,26 +88,50 @@ def parse_dnp3_packet(data, frame_number):
     output.append("\n" + "=" * 50 + "\n")
     return "\n".join(output)
 
+def display_menu():
+    """Display the main menu with options."""
+    print("\n" + "=" * 50)
+    print("DNP3 Packet Parser Menu")
+    print("=" * 50)
+    print("1 - Parse DNP3 packet")
+    print("2 - Leave")
+    print("=" * 50)
+
 def main():
-    print("Welcome to the DNP3 Packet Parser")
-    pcap_file = input("Please enter the name of the pcap file to process (e.g., 'capture.pcap'): ")
-    output_file = input("Please enter the name of the output text file (e.g., 'output.txt'): ")
+    while True:
+        display_menu()
 
-    # Load the pcap file
-    packets = rdpcap(pcap_file)
-    
-    with open(output_file, "w") as file:
-        for frame_number, packet in enumerate(packets, 1):
-            if Raw in packet:
-                # Extract the raw DNP3 payload
-                raw_data = bytes(packet[Raw])
+        choice = input("Enter your choice (1-2): ")
+
+        if choice == '1':
+            pcap_file = input("Please enter the name of the pcap file to process (e.g., 'capture.pcap'): ")
+            output_file = input("Please enter the name of the output text file (e.g., 'output.txt'): ")
+
+            # Load the pcap file
+            try:
+                packets = rdpcap(pcap_file)
+                with open(output_file, "w") as file:
+                    for frame_number, packet in enumerate(packets, 1):
+                        if Raw in packet:
+                            # Extract the raw DNP3 payload
+                            raw_data = bytes(packet[Raw])
+
+                            # Parse the packet and save output to file
+                            parsed_output = parse_dnp3_packet(raw_data, frame_number)
+                            file.write(parsed_output + "\n\n")
                 
-                # Parse the packet and save output to file
-                parsed_output = parse_dnp3_packet(raw_data, frame_number)
-                file.write(parsed_output + "\n\n")
-    
-    print(f"Packet data has been processed and saved to '{output_file}'")
+                print(f"Packet data has been processed and saved to '{output_file}'")
+            except FileNotFoundError:
+                print(f"Error: File '{pcap_file}' not found. Please check the file name and try again.")
+            input("Press Enter to return to the menu...")
+        
+        elif choice == '2':
+            print("Exiting program. Goodbye!")
+            break
+        
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
+            input("Press Enter to try again...")
 
-# Run the main function
 if __name__ == "__main__":
     main()

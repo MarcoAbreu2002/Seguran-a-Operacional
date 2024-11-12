@@ -9,11 +9,16 @@ from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether
 from concurrent.futures import ThreadPoolExecutor
 
+
 def print_menu():
-    print("""
-                 1 - Manipular Pacotes Modbus/TCP
-                 2 - Sair
-    """)
+    """Display the main menu with options."""
+    print("\n" + "=" * 50)
+    print("Modbus packet manipulater Menu")
+    print("=" * 50)
+    print("1 - Manipulate Modbus packets")
+    print("2 - Leave")
+    print("=" * 50)
+
 
 def is_valid_ip(ip):
     try:

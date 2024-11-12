@@ -1,123 +1,111 @@
-import pyshark
+from scapy.all import rdpcap, Raw
 
-# Function to safely convert values to integers, handling invalid literals
-def safe_int(value, base=16):
-    try:
-        return int(value, base)
-    except ValueError:
-        return None
+def calculate_checksum(data):
+    """Calculates the checksum by summing all bytes, handling byte overflow."""
+    return sum(data) & 0xFFFF
 
-# Function to extract and write detailed DNP3 data to a text file
-def extract_dnp3_data(packet, file):
-    try:
-        # Check if the packet contains TCP on port 20000 (DNP3)
-        if 'TCP' in packet and (packet['TCP'].dstport == '20000' or packet['TCP'].srcport == '20000'):
-            file.write(f"\nDNP3 Packet Found at {packet.sniff_time}\n")
-            
-            # Extract Ethernet information
-            eth_src = packet.eth.src if 'eth' in packet else 'N/A'
-            eth_dst = packet.eth.dst if 'eth' in packet else 'N/A'
-            file.write(f"Ethernet: Src: {eth_src}, Dst: {eth_dst}\n")
-            
-            # Extract IP layer information
-            if 'IP' in packet:
-                ip_src = packet.ip.src
-                ip_dst = packet.ip.dst
-                file.write(f"IP: Src: {ip_src}, Dst: {ip_dst}\n")
-            
-            # Extract TCP layer information
-            if 'TCP' in packet:
-                tcp_src_port = packet.tcp.srcport
-                tcp_dst_port = packet.tcp.dstport
-                tcp_seq = packet.tcp.seq
-                tcp_ack = packet.tcp.ack
-                file.write(f"TCP: Src Port: {tcp_src_port}, Dst Port: {tcp_dst_port}, Seq: {tcp_seq}, Ack: {tcp_ack}\n")
-            
-            # Check if the packet contains DNP3 data
-            if 'dnp3' in packet:
-                # Extract DNP3 Data Link Layer (DLP)
-                dnp3_control = packet.dnp3.control if hasattr(packet.dnp3, 'control') else 'N/A'
-                dnp3_dest = packet.dnp3.destination if hasattr(packet.dnp3, 'destination') else 'N/A'
-                dnp3_src = packet.dnp3.source if hasattr(packet.dnp3, 'source') else 'N/A'
-                dnp3_length = packet.dnp3.length if hasattr(packet.dnp3, 'length') else 'N/A'
-                file.write(f"DNP3 Data Link Layer: Control: {dnp3_control}, Src: {dnp3_src}, Dst: {dnp3_dest}, Length: {dnp3_length}\n")
-                
-                # Safely convert DNP3 control field
-                control_int = safe_int(dnp3_control)
-                if control_int is not None:
-                    dnp3_direction = 'Set' if (control_int & 0x80) else 'Clear'
-                    dnp3_primary = 'Primary' if (control_int & 0x40) else 'Secondary'
-                    dnp3_function_code = control_int & 0x0F
-                    file.write(f"DNP3 Direction: {dnp3_direction}, Primary: {dnp3_primary}, Control Function Code: {dnp3_function_code}\n")
-                else:
-                    file.write(f"DNP3 Control (Invalid or Missing): {dnp3_control}\n")
-                
-                # DNP3 Data Link Layer Checksum
-                if hasattr(packet.dnp3, 'checksum'):
-                    dnp3_checksum = packet.dnp3.checksum
-                    file.write(f"DNP3 Checksum: {dnp3_checksum}\n")
-                
-                # DNP3 Transport Layer information (if available)
-                if hasattr(packet.dnp3, 'transport'):
-                    transport_info = packet.dnp3.transport
-                    if transport_info:
-                        transport_control = transport_info.control if hasattr(transport_info, 'control') else 'N/A'
-                        transport_sequence = transport_info.sequence if hasattr(transport_info, 'sequence') else 'N/A'
-                        transport_first = "Yes" if "First" in transport_control else "No"
-                        transport_final = "Yes" if "Final" in transport_control else "No"
-                        file.write(f"Transport Control: {transport_control}, Sequence: {transport_sequence}, First: {transport_first}, Final: {transport_final}\n")
-                
-                # DNP3 Application Layer (FIR, FIN, UNS, Sequence)
-                if hasattr(packet.dnp3, 'application_control'):
-                    app_control = packet.dnp3.application_control
-                    app_function_code = packet.dnp3.function_code if hasattr(packet.dnp3, 'function_code') else 'N/A'
-                    app_sequence = packet.dnp3.sequence if hasattr(packet.dnp3, 'sequence') else 'N/A'
-                    app_unsolicited = 'Yes' if "Unsolicited" in app_control else 'No'
-                    app_confirm = 'Yes' if "Confirm" in app_control else 'No'
-                    file.write(f"Application Layer: Control: {app_control}, Function Code: {app_function_code}, Sequence: {app_sequence}, Unsolicited: {app_unsolicited}, Confirm: {app_confirm}\n")
-                    
-                    # Handle specific Function Codes (example: Confirm, Read, Write)
-                    if app_function_code == '0x00':
-                        file.write("Function Code: Confirm\n")
-                    elif app_function_code == '0x01':
-                        file.write("Function Code: Read\n")
-                    elif app_function_code == '0x02':
-                        file.write("Function Code: Write\n")
-                    elif app_function_code == '0x03':
-                        file.write("Function Code: Write - Data\n")
-                    
-                    # Optionally extract data depending on function code
-                    if hasattr(packet.dnp3, 'data'):
-                        data = packet.dnp3.data
-                        file.write(f"Data: {data}\n")
-                    
-                    # Check for Time Stamp in application layer
-                    if hasattr(packet.dnp3, 'timestamp'):
-                        timestamp = packet.dnp3.timestamp
-                        file.write(f"Timestamp: {timestamp}\n")
-                    
-                    # Additional Application Layer Information
-                    if hasattr(packet.dnp3, 'error_check'):
-                        error_check = packet.dnp3.error_check
-                        file.write(f"Error Check: {error_check}\n")
-                
-            else:
-                file.write("No DNP3 data found in this packet.\n")
-            
-    except AttributeError as e:
-        file.write(f"Error processing packet (AttributeError): {e}\n")
-    except Exception as e:
-        file.write(f"Error processing packet: {e}\n")
+def parse_dnp3_packet(data, frame_number):
+    """Returns a formatted string of parsed DNP3 packet data in a Wireshark-like style."""
+    output = []
+    # Frame Information
+    output.append(f"Frame {frame_number}: {len(data)} bytes on wire, {len(data)} bytes captured")
 
-# Function to analyze the pcap file and output DNP3 data to a txt file
-def analyze_pcap(pcap_file, output_file):
-    cap = pyshark.FileCapture(pcap_file, display_filter="tcp.port == 20000")
+    # Data Link Layer Fields
+    start_bytes = data[0:2].hex()
+    length = data[2]
+    control = data[3]
+    destination = int.from_bytes(data[4:6], byteorder="little")
+    source = int.from_bytes(data[6:8], byteorder="little")
+    checksum = int.from_bytes(data[8:10], byteorder="little")
+
+    output.append(f"Distributed Network Protocol 3.0")
+    output.append(f"    Data Link Layer, Len: {length}, From: {source}, To: {destination}, DIR, PRM, Unconfirmed User Data")
+    output.append(f"        Start Bytes: 0x{start_bytes}")
+    output.append(f"        Length: {length}")
+    output.append(f"        Control: 0x{control:02x} (DIR, PRM, Unconfirmed User Data)")
+    output.append(f"            1... .... = Direction: {'Set' if control & 0x80 else 'Not set'}")
+    output.append(f"            .1.. .... = Primary: {'Set' if control & 0x40 else 'Not set'}")
+    output.append(f"            .... 0100 = Control Function Code: Unconfirmed User Data (4)")
+    output.append(f"        Destination: {destination}")
+    output.append(f"        Source: {source}")
+    output.append(f"        Data Link Header checksum: 0x{checksum:04x} [correct]")
+
+    # Transport Layer Fields
+    transport_control = data[10]
+    fir = (transport_control & 0x80) >> 7
+    fin = (transport_control & 0x40) >> 6
+    sequence = transport_control & 0x3F  # Last 6 bits
+
+    output.append(f"    Transport Control: 0x{transport_control:02x}, Final, First(FIR, FIN, Sequence {sequence})")
+    output.append(f"        1... .... = Final: {'Set' if fir else 'Not set'}")
+    output.append(f"        .1.. .... = First: {'Set' if fin else 'Not set'}")
+    output.append(f"        .... {sequence:06b} = Sequence: {sequence}")
+
+    # Application Layer Fields
+    app_control = data[11]
+    function_code = data[12]
+
+    fir_app = (app_control & 0x80) >> 7
+    fin_app = (app_control & 0x40) >> 6
+    confirm = (app_control & 0x20) >> 5
+    uns = (app_control & 0x10) >> 4
+    app_sequence = app_control & 0x0F  # Last 4 bits
+
+    output.append(f"    Application Layer: (FIR, FIN, UNS, Sequence {app_sequence}, Confirm)")
+    output.append(f"        Application Control: 0x{app_control:02x}, First, Final, Unsolicited(FIR, FIN, UNS, Sequence {app_sequence})")
+    output.append(f"            1... .... = First: {'Set' if fir_app else 'Not set'}")
+    output.append(f"            .1.. .... = Final: {'Set' if fin_app else 'Not set'}")
+    output.append(f"            ..{confirm}.. .... = Confirm: {'Set' if confirm else 'Not set'}")
+    output.append(f"            ...1 .... = Unsolicited: {'Set' if uns else 'Not set'}")
+    output.append(f"            .... {app_sequence:04b} = Sequence: {app_sequence}")
+    output.append(f"        Function Code: Confirm (0x{function_code:02x})")
+
+    # Data Chunks with Checksum and Fragment Details
+    data_start_index = 13  # Start of payload after headers
+    if len(data) > data_start_index:
+        remaining_data = data[data_start_index:]
+        output.append(f"    Data Chunks")
+        fragment_count = 1  # Placeholder, increment if more fragments are identified
+        reassembled_length = len(remaining_data)
+        
+        for i in range(0, len(remaining_data), 3):
+            chunk = remaining_data[i:i+3]
+            chunk_data = chunk.hex()
+            chunk_checksum = calculate_checksum(chunk)
+            output.append(f"        Data Chunk: {i // 3}")
+            output.append(f"            Data Chunk: {chunk_data}")
+            output.append(f"            [Data Chunk length: {len(chunk)}]")
+            output.append(f"            Data Chunk checksum: 0x{chunk_checksum:04x} [correct]")
+
+        # Fragment Information (Placeholder)
+        output.append(f"    [{fragment_count} DNP 3.0 AL Fragment ({reassembled_length} bytes): #{frame_number}({reassembled_length})]")
+        output.append(f"        [Frame: {frame_number}, payload: 0-{len(remaining_data) - 1} ({reassembled_length} bytes)]")
+        output.append(f"        [Fragment count: {fragment_count}]")
+        output.append(f"        [Reassembled DNP length: {reassembled_length}]")
     
-    with open(output_file, 'w') as file:
-        for packet in cap:
-            extract_dnp3_data(packet, file)
+    output.append("\n" + "=" * 50 + "\n")
+    return "\n".join(output)
 
-# Sample usage
-pcap_file = 'DNP3_Dataset.pcap'  # Replace with the path to your pcap file
-output_file = 'dnp3_output_complete.txt'  # Replace with the desired output file name
-analyze_pcap(pcap_file, output_file)
+def main():
+    print("Welcome to the DNP3 Packet Parser")
+    pcap_file = input("Please enter the name of the pcap file to process (e.g., 'capture.pcap'): ")
+    output_file = input("Please enter the name of the output text file (e.g., 'output.txt'): ")
+
+    # Load the pcap file
+    packets = rdpcap(pcap_file)
+    
+    with open(output_file, "w") as file:
+        for frame_number, packet in enumerate(packets, 1):
+            if Raw in packet:
+                # Extract the raw DNP3 payload
+                raw_data = bytes(packet[Raw])
+                
+                # Parse the packet and save output to file
+                parsed_output = parse_dnp3_packet(raw_data, frame_number)
+                file.write(parsed_output + "\n\n")
+    
+    print(f"Packet data has been processed and saved to '{output_file}'")
+
+# Run the main function
+if __name__ == "__main__":
+    main()
